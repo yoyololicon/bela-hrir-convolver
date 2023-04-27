@@ -1,0 +1,4 @@
+*.sofa
+*.wav
+KU100_NF100/
+build/
