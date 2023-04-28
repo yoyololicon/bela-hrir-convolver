@@ -13,7 +13,6 @@ additive-synth: an example implementing an additive synthesiser based on an
 */
 
 #include <Bela.h>
-#include <libraries/Fft/Fft.h>
 #include <libraries/Gui/Gui.h>
 #include <libraries/GuiController/GuiController.h>
 #include <libraries/Scope/Scope.h>
@@ -45,7 +44,7 @@ int gHopCounter = 0;
 std::string gHRIRDir = "KU100_NF100";
 
 // Name of the sound file (in project folder)
-std::string gSoundFilename = "drum-loop.wav"; 
+std::string gSoundFilename = "mia_alarm.wav"; 
 
 // Buffers to hold the audio
 std::vector<float> gSoundBuffer;
@@ -79,7 +78,7 @@ KDTree gCoordTree;
 float gX, gY, gZ;
 
 // HRIR specifications
-int gHRIRTruncatedSamples = 59;
+int gHRIRTruncatedSamples = 90;
 float gRadius = 0;
 
 
@@ -128,20 +127,16 @@ void weighted_hrir_background(void *)
 	float sum = g[0] + g[1] + g[2];
 	std::for_each(g.begin(), g.end(), [sum](float &x){	x /= sum;});
 	
-	std::vector<float> weightedIR(gHRIRTruncatedSamples, 0.0);
+	std::vector<float> weightedIR(gHRIRTruncatedSamples);
 	
-	for (unsigned int i = 0; i < 3; i++){
-		std::transform(weightedIR.cbegin(), weightedIR.cend(), gHRIRInterleaved[interpolationIndexes[i] * 2].cbegin(), 
-					   weightedIR.begin(), [g, i](const float &out, const float &in){	return out + in * g[i];});
+	for (unsigned int c = 0; c < 2; c++){
+		std::fill(weightedIR.begin(), weightedIR.end(), 0.0);
+		for (unsigned int i = 0; i < 3; i++){
+			std::transform(weightedIR.cbegin(), weightedIR.cend(), gHRIRInterleaved[interpolationIndexes[i] * 2 + c].cbegin(), 
+						   weightedIR.begin(), [g, i](const float &out, const float &in){	return out + in * g[i];});
+		}
+		std::copy(weightedIR.begin(), weightedIR.end(), gSampledHRIR[c].begin());
 	}
-	std::copy(weightedIR.begin(), weightedIR.end(), gSampledHRIR[0].begin());
-	
-	std::fill(weightedIR.begin(), weightedIR.end(), 0.0);
-	for (unsigned int i = 0; i < 3; i++){
-		std::transform(weightedIR.cbegin(), weightedIR.cend(), gHRIRInterleaved[interpolationIndexes[i] * 2 + 1].cbegin(), 
-					   weightedIR.begin(), [g, i](const float &out, const float &in){	return out + in * g[i];});
-	}
-	std::copy(weightedIR.begin(), weightedIR.end(), gSampledHRIR[1].begin());
 	
 	gSampledITD = g[0] * gITDs[interpolationIndexes[0]] + g[1] * gITDs[interpolationIndexes[1]] + g[2] * gITDs[interpolationIndexes[2]];
 }
@@ -196,10 +191,11 @@ bool setup(BelaContext *context, void *userData)
     while(std::getline(fs, line)){
     	parse << line;
     	parse >> x >> y >> z;
+    	float r = sqrt(x * x + y * y + z * z);
     	if (gRadius == 0){
-    		gRadius = sqrt(x * x + y * y + z * z);
+    		gRadius = r;
     	}
-    	gHRIRCoordinates.push_back({x / gRadius, y / gRadius, z / gRadius});
+    	gHRIRCoordinates.push_back({x / r, y / r, z / r});
     	std::vector<int> neighbours;
     	while(parse >> n)
     		neighbours.push_back(n);
@@ -272,8 +268,8 @@ bool setup(BelaContext *context, void *userData)
     }
     
     std::vector<float> truncationWindow(gHRIRTruncatedSamples, 1.0);
-    for (unsigned int n = gHRIRTruncatedSamples / 2; n < gHRIRTruncatedSamples; n++)
-    	truncationWindow[n] = 0.5 * (1 - cos(2 * M_PI * n / (gHRIRTruncatedSamples - 1)));
+    for (unsigned int n = gHRIRTruncatedSamples / 4 * 3; n < gHRIRTruncatedSamples; n++)
+    	truncationWindow[n] = 0.5 * (1 - cos(2 * M_PI * n / (gHRIRTruncatedSamples / 2 - 1)));
     
 	for(auto &hrir : gHRIRInterleaved)
 	{
@@ -288,8 +284,8 @@ bool setup(BelaContext *context, void *userData)
 		gHRIRInterpolationGrad[c].resize(gHRIRTruncatedSamples);
 	}
     
-    // gCoordTree = KDTree(gSimplicesCentres);
-    gCoordTree = KDTree(gHRIRCoordinates);
+    gCoordTree = KDTree(gSimplicesCentres);
+    // gCoordTree = KDTree(gHRIRCoordinates);
     
 	// Set up the GUI
 	gGui.setup(context->projectName);
@@ -304,7 +300,7 @@ bool setup(BelaContext *context, void *userData)
 	gScope.setup(3, context->audioSampleRate);
 	
 	// Set up the thread for the HRIR
-	gSampleRetrieveTask = Bela_createAuxiliaryTask(nearest_hrir_background, 90, "bela-retrieve-hrir");
+	gSampleRetrieveTask = Bela_createAuxiliaryTask(weighted_hrir_background, 90, "bela-retrieve-hrir");
 
 	return true;
 }
