@@ -448,6 +448,5 @@ indexArr KDTree::knn(const point_t &pt, const int k)
     std::transform(result.begin(), result.end(), knni.begin(),
                    [](std::pair<size_t, float> x)
                    { return x.first; });
-    // std::reverse(knni.begin(), knni.end());
     return knni;
 }
