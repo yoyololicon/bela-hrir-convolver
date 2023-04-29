@@ -15,7 +15,6 @@ additive-synth: an example implementing an additive synthesiser based on an
 #include <Bela.h>
 #include <libraries/Gui/Gui.h>
 #include <libraries/GuiController/GuiController.h>
-#include <libraries/Scope/Scope.h>
 #include <libraries/AudioFile/AudioFile.h>
 #include <cmath>
 #include <algorithm>
@@ -40,16 +39,7 @@ int gOutputBufferPointer = 0;
 int gHopCounter = 0;
 
 // HRIR directory
-std::string gHRIRDir = "KU100_NF100";
-
-// Name of the sound file (in project folder)
-std::string gSoundFilename = "mia_alarm.wav";
-
-// Buffers to hold the audio
-std::vector<float> gSoundBuffer;
-
-// Read pointer into the audio buffer
-unsigned int gReadPointer = 0;
+std::string gHRIRDir = "hutubs";
 
 // Buffers to hold HRIRs
 std::vector<std::vector<float>> gHRIRInterleaved;
@@ -59,15 +49,17 @@ std::vector<std::vector<int>> gNeighborSimplices;
 std::vector<std::vector<int>> gSimplices;
 std::vector<std::vector<float>> gInverseMatrices;
 std::vector<float> gITDs;
+
+// Buffers to hold the sampled HRIRs
 std::vector<float> gSampledHRIR[2];
 std::vector<float> gCurrentHRIR[2];
 std::vector<float> gHRIRInterpolationGrad[2];
 
+// Buffers to hold the sampled ITDs
 float gSampledITD;
 float gCurrentITD = 0, gITDInterpGrad = 0;
-int gCurrentDelays[2] = {0, 0};
-float gDelayInterpWeights[2] = {1., 1.};
 
+// Error counts
 int gErrorCounts = 0;
 
 // KD tree for sample retrieval
@@ -77,15 +69,12 @@ KDTree gCoordTree;
 float gX, gY, gZ;
 
 // HRIR specifications
-int gHRIRTruncatedSamples = 90;
+int gHRIRTruncatedSamples = 64;
 float gRadius = 0;
 
 // Browser-based GUI to adjust parameters
 Gui gGui;
 GuiController gGuiController;
-
-// Browser-based oscilloscope
-Scope gScope;
 
 // Thread for HRIR processing
 AuxiliaryTask gSampleRetrieveTask;
@@ -93,7 +82,6 @@ AuxiliaryTask gSampleRetrieveTask;
 // Cached variables for the second thread
 float gCachedX, gCachedY, gCachedZ;
 
-// This function runs in an auxiliary task on Bela, calling process_fft
 void weighted_hrir_background(void *)
 {
 	std::vector<float> point{gCachedX, gCachedY, gCachedZ};
@@ -146,7 +134,6 @@ void weighted_hrir_background(void *)
 	gSampledITD = g[0] * gITDs[interpolationIndexes[0]] + g[1] * gITDs[interpolationIndexes[1]] + g[2] * gITDs[interpolationIndexes[2]];
 }
 
-// This function runs in an auxiliary task on Bela, calling process_fft
 void nearest_hrir_background(void *)
 {
 	std::vector<float> point{gCachedX, gCachedY, gCachedZ};
@@ -159,23 +146,11 @@ void nearest_hrir_background(void *)
 
 bool setup(BelaContext *context, void *userData)
 {
-	if (context->audioOutChannels != 2)
+	if ((context->audioOutChannels != 2) || (context->audioInChannels != 2))
 	{
 		rt_printf("Number of channels should be 2!");
 		return false;
 	}
-	// Load the audio file
-	gSoundBuffer = AudioFileUtilities::loadMono(gSoundFilename);
-
-	if (gSoundBuffer.empty())
-	{
-		rt_printf("Error loading audio file '%s'\n", gSoundFilename.c_str());
-		return false;
-	}
-
-	rt_printf("Loaded the audio file '%s' with %d frames (%.1f seconds)\n",
-			  gSoundFilename.c_str(), gSoundBuffer.size(),
-			  gSoundBuffer.size() / context->audioSampleRate);
 
 	gOutputBuffer[0].resize(kBufferSize);
 	gOutputBuffer[1].resize(kBufferSize);
@@ -270,7 +245,8 @@ bool setup(BelaContext *context, void *userData)
 		gSimplicesCentres.push_back(centre);
 	}
 
-	rt_printf("%d %d %d %d %d\n", gNeighborSimplices.size(), gSimplices.size(), gInverseMatrices.size(), gHRIRCoordinates.size(), gITDs.size());
+	rt_printf("Total number of HRIRs: %d\n", gHRIRCoordinates.size());
+	rt_printf("Total number of simplices: %d\n", gSimplices.size());
 
 	for (int n = 0; n < gHRIRCoordinates.size(); n++)
 	{
@@ -280,10 +256,12 @@ bool setup(BelaContext *context, void *userData)
 		gHRIRInterleaved.push_back(hrir[1]);
 	}
 
+	// Construct a half-Hann window for truncating HRIRs
 	std::vector<float> truncationWindow(gHRIRTruncatedSamples, 1.0);
 	for (unsigned int n = gHRIRTruncatedSamples * 3 / 4; n < gHRIRTruncatedSamples; n++)
 		truncationWindow[n] = 0.5 * (1 - cos(2 * M_PI * n / (gHRIRTruncatedSamples / 2 - 1)));
 
+	// Truncate HRIRs
 	for (auto &hrir : gHRIRInterleaved)
 	{
 		hrir.resize(gHRIRTruncatedSamples);
@@ -297,6 +275,7 @@ bool setup(BelaContext *context, void *userData)
 		gHRIRInterpolationGrad[c].resize(gHRIRTruncatedSamples);
 	}
 
+	// Set up the KD tree for sample retrieval
 	gCoordTree = KDTree(gSimplicesCentres);
 	// gCoordTree = KDTree(gHRIRCoordinates);
 
@@ -305,14 +284,11 @@ bool setup(BelaContext *context, void *userData)
 	gGuiController.setup(&gGui, "HRTF Audio Player");
 
 	// Arguments: name, default value, minimum, maximum, increment
-	gGuiController.addSlider("Elevation", 0, -45, 90, 0);
+	gGuiController.addSlider("Elevation", 0, -60, 90, 0);
 	gGuiController.addSlider("Azimuth", 0, -180, 180, 0);
 	gGuiController.addSlider("Radius", gRadius, 0.3, 2, 0);
 
-	// Set up the oscilloscope
-	gScope.setup(3, context->audioSampleRate);
-
-	// Set up the thread for the HRIR
+	// Set up the thread for the HRIR interpolation
 	gSampleRetrieveTask = Bela_createAuxiliaryTask(weighted_hrir_background, 90, "bela-retrieve-hrir");
 
 	return true;
@@ -339,37 +315,11 @@ void render(BelaContext *context, void *userData)
 
 	for (unsigned int n = 0; n < context->audioFrames; n++)
 	{
-		float in = gSoundBuffer[gReadPointer] * scaler;
-
-		// Increment pointer into audio file buffer
-		if (++gReadPointer >= gSoundBuffer.size())
-			gReadPointer = 0;
-
-		if (++gHopCounter >= kHopSize)
-		{
-			gHopCounter = 0;
-			gITDInterpGrad = (gSampledITD - gCurrentITD) / kHopSize;
-			for (unsigned int c = 0; c < 2; c++)
-				std::transform(gCurrentHRIR[c].cbegin(), gCurrentHRIR[c].cend(), gSampledHRIR[c].cbegin(),
-							   gHRIRInterpolationGrad[c].begin(), [](const float &cur, const float &next)
-							   { return (next - cur) / kHopSize; });
-
-			if ((gCachedX != gX) || (gCachedY != gCachedY) || (gCachedZ != gZ))
-			{
-				gCachedX = gX;
-				gCachedY = gY;
-				gCachedZ = gZ;
-				Bela_scheduleAuxiliaryTask(gSampleRetrieveTask);
-			}
-		}
-
-		for (unsigned int c = 0; c < 2; c++)
-			std::transform(gCurrentHRIR[c].cbegin(), gCurrentHRIR[c].cend(), gHRIRInterpolationGrad[c].cbegin(), gCurrentHRIR[c].begin(), std::plus<float>());
-
-		gCurrentITD += gITDInterpGrad;
-
+		// float in = gSoundBuffer[gReadPointer] * scaler;
+		float in = (audioRead(context, n, 0) + audioRead(context, n, 1)) * scaler;
 		gOutputBuffer[0][gOutputBufferPointer] = in;
 		gOutputBuffer[1][gOutputBufferPointer] = in;
+
 		if (gCurrentITD > 0)
 		{
 			int delay = int(gCurrentITD);
@@ -415,6 +365,29 @@ void render(BelaContext *context, void *userData)
 			audioWrite(context, n, 0, out);
 		}
 
+		if (++gHopCounter >= kHopSize)
+		{
+			gHopCounter = 0;
+			gITDInterpGrad = (gSampledITD - gCurrentITD) / kHopSize;
+			for (unsigned int c = 0; c < 2; c++)
+				std::transform(gCurrentHRIR[c].cbegin(), gCurrentHRIR[c].cend(), gSampledHRIR[c].cbegin(),
+							   gHRIRInterpolationGrad[c].begin(), [](const float &cur, const float &next)
+							   { return (next - cur) / kHopSize; });
+
+			if ((gCachedX != gX) || (gCachedY != gCachedY) || (gCachedZ != gZ))
+			{
+				gCachedX = gX;
+				gCachedY = gY;
+				gCachedZ = gZ;
+				Bela_scheduleAuxiliaryTask(gSampleRetrieveTask);
+			}
+		}
+
+		for (unsigned int c = 0; c < 2; c++)
+			std::transform(gCurrentHRIR[c].cbegin(), gCurrentHRIR[c].cend(), gHRIRInterpolationGrad[c].cbegin(), gCurrentHRIR[c].begin(), std::plus<float>());
+
+		gCurrentITD += gITDInterpGrad;
+
 		// for (unsigned int c = 0; c < context->audioOutChannels; c++){
 		// 	int delay = gCurrentDelays[c];
 		// 	float p = gDelayInterpWeights[c];
@@ -431,9 +404,6 @@ void render(BelaContext *context, void *userData)
 		gOutputBufferPointer++;
 		if (gOutputBufferPointer >= kBufferSize)
 			gOutputBufferPointer = 0;
-
-		// Write the output to the oscilloscope
-		gScope.log(in, in, in);
 	}
 }
 
