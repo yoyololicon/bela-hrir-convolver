@@ -28,7 +28,6 @@ additive-synth: an example implementing an additive synthesiser based on an
 // Constants that define the program behaviour
 const std::string kInfoFile = "info.txt";
 const std::string kSimplexFile = "simplices.txt";
-const std::string kITDFile = "itds.txt";
 const unsigned int kHopSize = 32;
 const unsigned int kBufferSize = 2048;
 const unsigned int kNeighbours = 24;
@@ -39,7 +38,7 @@ int gOutputBufferPointer = 0;
 int gHopCounter = 0;
 
 // HRIR directory
-std::string gHRIRDir = "hutubs";
+std::string gHRIRDir = "KU100_NF100";
 
 // Buffers to hold HRIRs
 std::vector<std::vector<float>> gHRIRInterleaved;
@@ -48,16 +47,11 @@ std::vector<std::vector<float>> gSimplicesCentres;
 std::vector<std::vector<int>> gNeighborSimplices;
 std::vector<std::vector<int>> gSimplices;
 std::vector<std::vector<float>> gInverseMatrices;
-std::vector<float> gITDs;
 
 // Buffers to hold the sampled HRIRs
 std::vector<float> gSampledHRIR[2];
 std::vector<float> gCurrentHRIR[2];
 std::vector<float> gHRIRInterpolationGrad[2];
-
-// Buffers to hold the sampled ITDs
-float gSampledITD;
-float gCurrentITD = 0, gITDInterpGrad = 0;
 
 // Error counts
 int gErrorCounts = 0;
@@ -69,7 +63,7 @@ KDTree gCoordTree;
 float gX, gY, gZ;
 
 // HRIR specifications
-int gHRIRTruncatedSamples = 64;
+int gHRIRTruncatedSamples;
 float gRadius = 0;
 
 // Browser-based GUI to adjust parameters
@@ -130,8 +124,6 @@ void weighted_hrir_background(void *)
 		}
 		std::copy(weightedIR.begin(), weightedIR.end(), gSampledHRIR[c].begin());
 	}
-
-	gSampledITD = g[0] * gITDs[interpolationIndexes[0]] + g[1] * gITDs[interpolationIndexes[1]] + g[2] * gITDs[interpolationIndexes[2]];
 }
 
 void nearest_hrir_background(void *)
@@ -141,7 +133,6 @@ void nearest_hrir_background(void *)
 
 	std::copy(gHRIRInterleaved[index * 2].begin(), gHRIRInterleaved[index * 2].end(), gSampledHRIR[0].begin());
 	std::copy(gHRIRInterleaved[index * 2 + 1].begin(), gHRIRInterleaved[index * 2 + 1].end(), gSampledHRIR[1].begin());
-	gSampledITD = gITDs[index];
 }
 
 bool setup(BelaContext *context, void *userData)
@@ -211,23 +202,6 @@ bool setup(BelaContext *context, void *userData)
 	}
 	fs.close();
 
-	auto itdFile = gHRIRDir + "/" + kITDFile;
-	fs.open(itdFile, std::fstream::in);
-	if (fs.fail())
-	{
-		rt_printf("Cannot open '%s'\n", itdFile.c_str());
-		return false;
-	}
-
-	float itd;
-	while (std::getline(fs, line))
-	{
-		parse << line;
-		parse >> itd;
-		gITDs.push_back(itd * context->audioSampleRate);
-		parse.clear();
-	}
-
 	for (auto &simplex : gSimplices)
 	{
 		std::vector<float> centre(3, 0.0);
@@ -250,22 +224,12 @@ bool setup(BelaContext *context, void *userData)
 
 	for (int n = 0; n < gHRIRCoordinates.size(); n++)
 	{
-		auto hrirFile = gHRIRDir + "/" + std::to_string(n) + "_min.wav";
+		auto hrirFile = gHRIRDir + "/" + std::to_string(n) + ".wav";
 		auto hrir = AudioFileUtilities::load(hrirFile);
 		gHRIRInterleaved.push_back(hrir[0]);
 		gHRIRInterleaved.push_back(hrir[1]);
-	}
-
-	// Construct a half-Hann window for truncating HRIRs
-	std::vector<float> truncationWindow(gHRIRTruncatedSamples, 1.0);
-	for (unsigned int n = gHRIRTruncatedSamples * 3 / 4; n < gHRIRTruncatedSamples; n++)
-		truncationWindow[n] = 0.5 * (1 - cos(2 * M_PI * n / (gHRIRTruncatedSamples / 2 - 1)));
-
-	// Truncate HRIRs
-	for (auto &hrir : gHRIRInterleaved)
-	{
-		hrir.resize(gHRIRTruncatedSamples);
-		std::transform(hrir.cbegin(), hrir.cend(), truncationWindow.cbegin(), hrir.begin(), std::multiplies<float>());
+		if (n == 0)
+			gHRIRTruncatedSamples = hrir[0].size();
 	}
 
 	for (unsigned int c = 0; c < 2; c++)
@@ -320,55 +284,19 @@ void render(BelaContext *context, void *userData)
 		gOutputBuffer[0][gOutputBufferPointer] = in;
 		gOutputBuffer[1][gOutputBufferPointer] = in;
 
-		if (gCurrentITD > 0)
+		for (unsigned int c = 0; c < 2; c++)
 		{
-			int delay = int(gCurrentITD);
-			float p = gCurrentITD - delay;
-			float out = 0;
-
+			float out = 0.0;
 			for (unsigned int k = 0; k < gHRIRTruncatedSamples; k++)
 			{
-				out += gCurrentHRIR[0][k] * gOutputBuffer[0][(gOutputBufferPointer - k + kBufferSize) % kBufferSize];
+				out += gCurrentHRIR[c][k] * gOutputBuffer[c][(gOutputBufferPointer - k + kBufferSize) % kBufferSize];
 			}
-			audioWrite(context, n, 0, out);
-
-			out = gCurrentHRIR[1][0] * gOutputBuffer[1][(gOutputBufferPointer - delay + kBufferSize) % kBufferSize] * (1 - p);
-			float ir;
-			for (unsigned int k = 1; k < gHRIRTruncatedSamples; k++)
-			{
-				ir = gCurrentHRIR[1][k - 1] * p + gCurrentHRIR[1][k] * (1 - p);
-				out += gOutputBuffer[1][(gOutputBufferPointer - delay - k + kBufferSize) % kBufferSize] * ir;
-			}
-			out += gOutputBuffer[1][(gOutputBufferPointer - delay - gHRIRTruncatedSamples + kBufferSize) % kBufferSize] * gCurrentHRIR[1][gHRIRTruncatedSamples - 1] * p;
-			audioWrite(context, n, 1, out);
-		}
-		else
-		{
-			int delay = int(-gCurrentITD);
-			float p = -gCurrentITD - delay;
-			float out = 0;
-
-			for (unsigned int k = 0; k < gHRIRTruncatedSamples; k++)
-			{
-				out += gCurrentHRIR[1][k] * gOutputBuffer[1][(gOutputBufferPointer - k + kBufferSize) % kBufferSize];
-			}
-			audioWrite(context, n, 1, out);
-
-			out = gCurrentHRIR[0][0] * gOutputBuffer[0][(gOutputBufferPointer - delay + kBufferSize) % kBufferSize] * (1 - p);
-			float ir;
-			for (unsigned int k = 1; k < gHRIRTruncatedSamples; k++)
-			{
-				ir = gCurrentHRIR[0][k - 1] * p + gCurrentHRIR[0][k] * (1 - p);
-				out += gOutputBuffer[0][(gOutputBufferPointer - delay - k + kBufferSize) % kBufferSize] * ir;
-			}
-			out += gCurrentHRIR[0][gHRIRTruncatedSamples - 1] * gOutputBuffer[0][(gOutputBufferPointer - delay - gHRIRTruncatedSamples + kBufferSize) % kBufferSize] * p;
-			audioWrite(context, n, 0, out);
+			audioWrite(context, n, c, out);
 		}
 
 		if (++gHopCounter >= kHopSize)
 		{
 			gHopCounter = 0;
-			gITDInterpGrad = (gSampledITD - gCurrentITD) / kHopSize;
 			for (unsigned int c = 0; c < 2; c++)
 				std::transform(gCurrentHRIR[c].cbegin(), gCurrentHRIR[c].cend(), gSampledHRIR[c].cbegin(),
 							   gHRIRInterpolationGrad[c].begin(), [](const float &cur, const float &next)
@@ -385,21 +313,6 @@ void render(BelaContext *context, void *userData)
 
 		for (unsigned int c = 0; c < 2; c++)
 			std::transform(gCurrentHRIR[c].cbegin(), gCurrentHRIR[c].cend(), gHRIRInterpolationGrad[c].cbegin(), gCurrentHRIR[c].begin(), std::plus<float>());
-
-		gCurrentITD += gITDInterpGrad;
-
-		// for (unsigned int c = 0; c < context->audioOutChannels; c++){
-		// 	int delay = gCurrentDelays[c];
-		// 	float p = gDelayInterpWeights[c];
-		// 	for (unsigned int k = 0; k < gHRIRTruncatedSamples; k++){
-		// 	   	float ir = gCurrentHRIR[c][k] * in;
-		// 	    float irp = ir * p;
-		// 		gOutputBuffer[c][(gOutputBufferPointer + k + delay) % kBufferSize] += irp;
-		// 		gOutputBuffer[c][(gOutputBufferPointer + k + delay + 1) % kBufferSize] += ir - irp;
-		// 	}
-		//       audioWrite(context, n, c, gOutputBuffer[c][gOutputBufferPointer]);
-		//       gOutputBuffer[c][gOutputBufferPointer] = 0;
-		// }
 
 		gOutputBufferPointer++;
 		if (gOutputBufferPointer >= kBufferSize)
