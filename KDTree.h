@@ -100,7 +100,7 @@ private:
         const point_t &pt,       //
         const size_t &level,     //
         const KDNodePtr &best,   //
-        const float &best_dist  //
+        const float &best_dist   //
     );
 
     // default caller
@@ -115,17 +115,16 @@ private:
     pointIndexArr neighborhood_( //
         const KDNodePtr &branch, //
         const point_t &pt,       //
-        const float &rad,       //
+        const float &rad,        //
         const size_t &level      //
     );
-    
-    void knn_( //
+
+    void knn_(                   //
         const KDNodePtr &branch, //
         const point_t &pt,       //
         const size_t &level,     //
         const size_t &k,
-        std::deque<std::pair<size_t, float>> &result
-    );
+        std::deque<std::pair<size_t, float>> &result);
 
 public:
     pointIndexArr neighborhood( //
@@ -139,6 +138,6 @@ public:
     indexArr neighborhood_indices( //
         const point_t &pt,         //
         const float &rad);
-        
+
     indexArr knn(const point_t &pt, const int k);
 };

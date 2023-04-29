@@ -1,4 +1,6 @@
 *.sofa
 *.wav
+*.zip
 KU100_NF100/
 build/
+.vscode/

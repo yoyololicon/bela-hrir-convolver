@@ -182,7 +182,7 @@ KDNodePtr KDTree::nearest_(  //
     const point_t &pt,       //
     const size_t &level,     //
     const KDNodePtr &best,   //
-    const float &best_dist  //
+    const float &best_dist   //
 )
 {
     float d, dx, dx2;
@@ -284,7 +284,7 @@ pointIndex KDTree::nearest_pointIndex(const point_t &pt)
 pointIndexArr KDTree::neighborhood_( //
     const KDNodePtr &branch,         //
     const point_t &pt,               //
-    const float &rad,               //
+    const float &rad,                //
     const size_t &level              //
 )
 {
@@ -372,16 +372,12 @@ indexArr KDTree::neighborhood_indices( //
     return nbhi;
 }
 
-
-
-
-void KDTree::knn_(  //
+void KDTree::knn_(           //
     const KDNodePtr &branch, //
     const point_t &pt,       //
     const size_t &level,     //
     const size_t &k,
-    std::deque<std::pair<size_t, float>> &result
-)
+    std::deque<std::pair<size_t, float>> &result)
 {
     float d, dx, dx2;
 
@@ -396,19 +392,22 @@ void KDTree::knn_(  //
     d = dist2(branch_pt, pt);
     dx = branch_pt.at(level) - pt.at(level);
     dx2 = dx * dx;
-    
+
     if (result.empty() || d <= result.front().second)
         result.push_front(std::pair<size_t, float>(size_t(*branch), d));
-	else if (d < result.back().second){
-		for(auto pos = result.begin(); pos != result.end(); pos++){
-			if(d <= pos->second){
-				result.insert(pos, std::pair<size_t, float>(size_t(*branch), d));
-				break;
-			}
-		}
-	}
+    else if (d < result.back().second)
+    {
+        for (auto pos = result.begin(); pos != result.end(); pos++)
+        {
+            if (d <= pos->second)
+            {
+                result.insert(pos, std::pair<size_t, float>(size_t(*branch), d));
+                break;
+            }
+        }
+    }
     if (result.size() > k)
-    	result.resize(k);
+        result.resize(k);
 
     size_t next_lv = (level + 1) % dim;
     KDNodePtr section;
@@ -432,11 +431,10 @@ void KDTree::knn_(  //
     // only check the other branch if it makes sense to do so
     if (dx2 >= result.back().second)
     {
-    	return;
+        return;
     }
     knn_(other, pt, next_lv, k, result);
 };
-
 
 indexArr KDTree::knn(const point_t &pt, const int k)
 {
