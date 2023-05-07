@@ -1,17 +1,3 @@
-/*
- ____  _____ _        _
-| __ )| ____| |      / \
-|  _ \|  _| | |     / _ \
-| |_) | |___| |___ / ___ \
-|____/|_____|_____/_/   \_\
-
-http://bela.io
-
-C++ Real-Time Audio Programming with Bela - Lecture 5: Classes and Objects
-additive-synth: an example implementing an additive synthesiser based on an
-				array of Wavetable oscillator objects
-*/
-
 #include <Bela.h>
 #include <libraries/Gui/Gui.h>
 #include <libraries/GuiController/GuiController.h>
@@ -33,7 +19,7 @@ const unsigned int kHopSize = 32;
 const unsigned int kBufferSize = 2048;
 const unsigned int kNeighbours = 24;
 
-// Circular buffer and pointer for assembling a window of samples
+// Circular buffer and pointer for audio input
 std::vector<float> gOutputBuffer[2];
 int gOutputBufferPointer = 0;
 int gHopCounter = 0;
@@ -85,17 +71,20 @@ float gCachedX, gCachedY, gCachedZ;
 void weighted_hrir_background(void *)
 {
 	std::vector<float> point{gCachedX, gCachedY, gCachedZ};
+	// Find k simplices that could contain the point
 	auto simplices = gCoordTree.knn(point, kNeighbours);
 
 	std::vector<float> g(3);
 	int simplex = -1;
 	for (auto &s : simplices)
 	{
+		// Calculate the interpolation weights
 		std::fill(g.begin(), g.end(), 0.);
 		for (unsigned int i = 0; i < 9; i++)
 		{
 			g[i / 3] += gInverseMatrices[s][i] * point[i % 3];
 		}
+		// Check if the weights are positive
 		if (std::all_of(g.cbegin(), g.cend(), [](float x)
 						{ return x >= 0; }))
 		{
@@ -104,6 +93,7 @@ void weighted_hrir_background(void *)
 		}
 	}
 
+	// If no proper simplex is found, return
 	if (simplex < 0)
 	{
 		gErrorCounts++;
@@ -111,14 +101,17 @@ void weighted_hrir_background(void *)
 		return;
 	}
 
+	// get the HRIRs indexes
 	auto interpolationIndexes = gSimplices[simplex];
 
+	// normalize the weights
 	float sum = g[0] + g[1] + g[2];
 	std::for_each(g.begin(), g.end(), [sum](float &x)
 				  { x /= sum; });
 
 	std::vector<float> weightedIR(gHRIRTruncatedSamples);
 
+	// interpolate the minimum phase HRIRs
 	for (unsigned int c = 0; c < 2; c++)
 	{
 		std::fill(weightedIR.begin(), weightedIR.end(), 0.0);
@@ -130,15 +123,17 @@ void weighted_hrir_background(void *)
 		}
 		std::copy(weightedIR.begin(), weightedIR.end(), gSampledHRIR[c].begin());
 	}
-
+	// interpolate the ITDs
 	gSampledITD = g[0] * gITDs[interpolationIndexes[0]] + g[1] * gITDs[interpolationIndexes[1]] + g[2] * gITDs[interpolationIndexes[2]];
 }
 
 void nearest_hrir_background(void *)
 {
 	std::vector<float> point{gCachedX, gCachedY, gCachedZ};
+	// Find the nearest HRIR
 	auto index = gCoordTree.nearest_index(point);
 
+	// Copy the HRIR and ITD
 	std::copy(gHRIRInterleaved[index * 2].begin(), gHRIRInterleaved[index * 2].end(), gSampledHRIR[0].begin());
 	std::copy(gHRIRInterleaved[index * 2 + 1].begin(), gHRIRInterleaved[index * 2 + 1].end(), gSampledHRIR[1].begin());
 	gSampledITD = gITDs[index];
@@ -169,6 +164,7 @@ bool setup(BelaContext *context, void *userData)
 		return false;
 	}
 
+	// Read the HRIR coordinates and the neighbour simplices
 	while (std::getline(fs, line))
 	{
 		parse << line;
@@ -197,6 +193,7 @@ bool setup(BelaContext *context, void *userData)
 
 	float w;
 	int s1, s2, s3;
+	// Read the inverse matrices and the simplices
 	while (std::getline(fs, line))
 	{
 		parse << line;
@@ -220,6 +217,7 @@ bool setup(BelaContext *context, void *userData)
 	}
 
 	float itd;
+	// Read the ITDs
 	while (std::getline(fs, line))
 	{
 		parse << line;
@@ -228,6 +226,7 @@ bool setup(BelaContext *context, void *userData)
 		parse.clear();
 	}
 
+	// Calculate the centres of the simplices
 	for (auto &simplex : gSimplices)
 	{
 		std::vector<float> centre(3, 0.0);
@@ -248,6 +247,7 @@ bool setup(BelaContext *context, void *userData)
 	rt_printf("Total number of HRIRs: %d\n", gHRIRCoordinates.size());
 	rt_printf("Total number of simplices: %d\n", gSimplices.size());
 
+	// Load the minimum-phase HRIRs
 	for (int n = 0; n < gHRIRCoordinates.size(); n++)
 	{
 		auto hrirFile = gHRIRDir + "/" + std::to_string(n) + "_min.wav";
@@ -261,13 +261,14 @@ bool setup(BelaContext *context, void *userData)
 	for (unsigned int n = gHRIRTruncatedSamples * 3 / 4; n < gHRIRTruncatedSamples; n++)
 		truncationWindow[n] = 0.5 * (1 - cos(2 * M_PI * n / (gHRIRTruncatedSamples / 2 - 1)));
 
-	// Truncate HRIRs
+	// Truncate minimum-phase HRIRs
 	for (auto &hrir : gHRIRInterleaved)
 	{
 		hrir.resize(gHRIRTruncatedSamples);
 		std::transform(hrir.cbegin(), hrir.cend(), truncationWindow.cbegin(), hrir.begin(), std::multiplies<float>());
 	}
 
+	// Set up the buffers for HRIR interpolation
 	for (unsigned int c = 0; c < 2; c++)
 	{
 		gSampledHRIR[c].resize(gHRIRTruncatedSamples);
@@ -277,7 +278,12 @@ bool setup(BelaContext *context, void *userData)
 
 	// Set up the KD tree for sample retrieval
 	gCoordTree = KDTree(gSimplicesCentres);
+	// Set up the thread for the HRIR interpolation
+	gSampleRetrieveTask = Bela_createAuxiliaryTask(weighted_hrir_background, 90, "bela-retrieve-hrir");
+
+	// uncomment the following lines and comment the previous two lines to use nearest neighbour instead of interpolation
 	// gCoordTree = KDTree(gHRIRCoordinates);
+	// gSampleRetrieveTask = Bela_createAuxiliaryTask(nearest_hrir_background, 90, "bela-retrieve-hrir");
 
 	// Set up the GUI
 	gGui.setup(context->projectName);
@@ -288,9 +294,6 @@ bool setup(BelaContext *context, void *userData)
 	gGuiController.addSlider("Azimuth", 0, -180, 180, 0);
 	gGuiController.addSlider("Radius", gRadius, 0.3, 2, 0);
 
-	// Set up the thread for the HRIR interpolation
-	gSampleRetrieveTask = Bela_createAuxiliaryTask(weighted_hrir_background, 90, "bela-retrieve-hrir");
-
 	return true;
 }
 
@@ -300,9 +303,11 @@ void render(BelaContext *context, void *userData)
 	float az = gGuiController.getSliderValue(1);
 	float radius = gGuiController.getSliderValue(2);
 
+	// convert degrees to radians
 	float col = map(90 - el, 0, 180, 0, M_PI);
 	az = -map(az, -180, 180, -M_PI, M_PI);
 
+	// calculate the new position of the sound source
 	float col_sin = sin(col);
 	float col_cos = cos(col);
 	float az_sin = sin(az);
@@ -311,27 +316,32 @@ void render(BelaContext *context, void *userData)
 	gY = col_sin * az_sin;
 	gZ = col_cos;
 
+	// use distance attenuation
 	float scaler = gRadius / radius;
 
 	for (unsigned int n = 0; n < context->audioFrames; n++)
 	{
-		// float in = gSoundBuffer[gReadPointer] * scaler;
+		// Read the audio input and convert to mono
 		float in = (audioRead(context, n, 0) + audioRead(context, n, 1)) * scaler;
+		// store the input in the output buffer
 		gOutputBuffer[0][gOutputBufferPointer] = in;
 		gOutputBuffer[1][gOutputBufferPointer] = in;
 
+		// if ITD is positive, the right channel is delayed
 		if (gCurrentITD > 0)
 		{
 			int delay = int(gCurrentITD);
 			float p = gCurrentITD - delay;
 			float out = 0;
 
+			// zero-delay convolution on the left channel
 			for (unsigned int k = 0; k < gHRIRTruncatedSamples; k++)
 			{
 				out += gCurrentHRIR[0][k] * gOutputBuffer[0][(gOutputBufferPointer - k + kBufferSize) % kBufferSize];
 			}
 			audioWrite(context, n, 0, out);
 
+			// convolution with delay on the right channel
 			out = gCurrentHRIR[1][0] * gOutputBuffer[1][(gOutputBufferPointer - delay + kBufferSize) % kBufferSize] * (1 - p);
 			float ir;
 			for (unsigned int k = 1; k < gHRIRTruncatedSamples; k++)
@@ -342,18 +352,21 @@ void render(BelaContext *context, void *userData)
 			out += gOutputBuffer[1][(gOutputBufferPointer - delay - gHRIRTruncatedSamples + kBufferSize) % kBufferSize] * gCurrentHRIR[1][gHRIRTruncatedSamples - 1] * p;
 			audioWrite(context, n, 1, out);
 		}
+		// if ITD is negative, the left channel is delayed
 		else
 		{
 			int delay = int(-gCurrentITD);
 			float p = -gCurrentITD - delay;
 			float out = 0;
 
+			// zero-delay convolution on the right channel
 			for (unsigned int k = 0; k < gHRIRTruncatedSamples; k++)
 			{
 				out += gCurrentHRIR[1][k] * gOutputBuffer[1][(gOutputBufferPointer - k + kBufferSize) % kBufferSize];
 			}
 			audioWrite(context, n, 1, out);
 
+			// convolution with delay on the left channel
 			out = gCurrentHRIR[0][0] * gOutputBuffer[0][(gOutputBufferPointer - delay + kBufferSize) % kBufferSize] * (1 - p);
 			float ir;
 			for (unsigned int k = 1; k < gHRIRTruncatedSamples; k++)
@@ -365,15 +378,18 @@ void render(BelaContext *context, void *userData)
 			audioWrite(context, n, 0, out);
 		}
 
+		// get new HRIR samples
 		if (++gHopCounter >= kHopSize)
 		{
 			gHopCounter = 0;
+			// calculate the interpolation gradients for sample-level interpolation
 			gITDInterpGrad = (gSampledITD - gCurrentITD) / kHopSize;
 			for (unsigned int c = 0; c < 2; c++)
 				std::transform(gCurrentHRIR[c].cbegin(), gCurrentHRIR[c].cend(), gSampledHRIR[c].cbegin(),
 							   gHRIRInterpolationGrad[c].begin(), [](const float &cur, const float &next)
 							   { return (next - cur) / kHopSize; });
 
+			// fire the next sample retrieval task if the coordinates have changed
 			if ((gCachedX != gX) || (gCachedY != gCachedY) || (gCachedZ != gZ))
 			{
 				gCachedX = gX;
@@ -383,24 +399,14 @@ void render(BelaContext *context, void *userData)
 			}
 		}
 
+		// interpolate the HRIR samples through time
 		for (unsigned int c = 0; c < 2; c++)
 			std::transform(gCurrentHRIR[c].cbegin(), gCurrentHRIR[c].cend(), gHRIRInterpolationGrad[c].cbegin(), gCurrentHRIR[c].begin(), std::plus<float>());
 
+		// interpolate the ITD through time
 		gCurrentITD += gITDInterpGrad;
 
-		// for (unsigned int c = 0; c < context->audioOutChannels; c++){
-		// 	int delay = gCurrentDelays[c];
-		// 	float p = gDelayInterpWeights[c];
-		// 	for (unsigned int k = 0; k < gHRIRTruncatedSamples; k++){
-		// 	   	float ir = gCurrentHRIR[c][k] * in;
-		// 	    float irp = ir * p;
-		// 		gOutputBuffer[c][(gOutputBufferPointer + k + delay) % kBufferSize] += irp;
-		// 		gOutputBuffer[c][(gOutputBufferPointer + k + delay + 1) % kBufferSize] += ir - irp;
-		// 	}
-		//       audioWrite(context, n, c, gOutputBuffer[c][gOutputBufferPointer]);
-		//       gOutputBuffer[c][gOutputBufferPointer] = 0;
-		// }
-
+		// increment the output buffer pointer
 		gOutputBufferPointer++;
 		if (gOutputBufferPointer >= kBufferSize)
 			gOutputBufferPointer = 0;
