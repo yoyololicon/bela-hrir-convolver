@@ -259,7 +259,7 @@ bool setup(BelaContext *context, void *userData)
 	// Construct a half-Hann window for truncating HRIRs
 	std::vector<float> truncationWindow(gHRIRTruncatedSamples, 1.0);
 	for (unsigned int n = gHRIRTruncatedSamples * 3 / 4; n < gHRIRTruncatedSamples; n++)
-		truncationWindow[n] = 0.5 * (1 - cos(2 * M_PI * n / (gHRIRTruncatedSamples / 2 - 1)));
+		truncationWindow[n] = 0.5 * (1 - cos(2 * M_PI * (n - gHRIRTruncatedSamples / 2) / (gHRIRTruncatedSamples / 2 - 1)));
 
 	// Truncate minimum-phase HRIRs
 	for (auto &hrir : gHRIRInterleaved)
