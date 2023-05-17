@@ -10,7 +10,7 @@ https://github.com/yoyololicon/bela-hrir-convolver/assets/17811395/dbff7d2f-188f
 1. Grab a [Bela board](https://bela.io/).
 2. Run the [preprocessing notebook](preprocess.ipynb). In the notebook, you can specify the HRTF `*.sofa` you want to download from [sofaconvention](https://www.sofaconventions.org/mediawiki/index.php/Files) and the directory name for putting the processed files.
 3. Specify the directory name at L27 in `render.cpp` to the directory you just created.
-4. Upload the whole working directory to your Bela board then you're done!
+4. Upload the whole repository to your Bela board then you're done!
 
 ## Additional Materials
 
