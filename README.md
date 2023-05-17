@@ -16,3 +16,4 @@ https://github.com/yoyololicon/bela-hrir-convolver/assets/17811395/dbff7d2f-188f
 
 For details on the application design and ablation studies, please refer to this [report](report.pdf).
 To use the minimum-phase and ITDs representation stated in the report, please replace `render.cpp` with the one at the branch `minimum-phase-itd`.
+The KD Tree is adapted from crvs's [implementation](https://github.com/crvs/KDTree).
